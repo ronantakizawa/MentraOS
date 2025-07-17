@@ -7,7 +7,6 @@ import { useAuth } from './useAuth';
 interface UseAppHealthReturn {
   filterHealthyApps: (apps: AppI[]) => AppI[];
   reportAppError: (packageName: string, error: any) => Promise<void>;
-  isAppHealthy: (packageName: string) => boolean;
   refreshHealthStatus: () => Promise<void>;
   isLoading: boolean;
 }
@@ -121,7 +120,6 @@ export function useAppHealth(): UseAppHealthReturn {
   return {
     filterHealthyApps,
     reportAppError,
-    isAppHealthy,
     refreshHealthStatus,
     isLoading
   };

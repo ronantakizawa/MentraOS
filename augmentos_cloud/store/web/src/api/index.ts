@@ -1,5 +1,5 @@
-// src/api/index.ts - Updated with health monitoring
-import { AppI } from "../types";
+// src/api/index.ts
+import { AppI } from "@/types";
 import axios from "axios";
 import { appHealthMonitor } from '../utils/appHealthMonitor';
 
@@ -72,7 +72,7 @@ const handleAppError = async (packageName: string, error: any, operation: string
 const appService = {
   /**
    * Get all public apps (no auth required)
-   * Uses store backend - now includes health filtering
+   * Uses store backend
    */
   getPublicApps: async (): Promise<AppI[]> => {
     try {
@@ -93,7 +93,7 @@ const appService = {
 
   /**
    * Get all available apps (auth required)
-   * Uses store backend - now includes health filtering
+   * Uses store backend
    * @param options Optional filter options
    */
   getAvailableApps: async (options?: AppFilterOptions): Promise<AppI[]> => {
@@ -221,7 +221,7 @@ const appService = {
 
   /**
    * Search for apps (no auth required)
-   * Uses store backend - now includes health filtering
+   * Uses store backend
    * @param query Search query string
    * @param options Optional filter options
    */

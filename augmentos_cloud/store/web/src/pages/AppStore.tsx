@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link, useLocation } from 'react-router-dom';
-import { Search, X, Building, Lock, AlertTriangle } from 'lucide-react';
+import { Search, X, Building, Lock } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
 import { usePlatform } from '../hooks/usePlatform';
@@ -30,7 +30,7 @@ const AppStore: React.FC = () => {
   const { isAuthenticated, user } = useAuth();
   const { theme } = useTheme();
   const { isWebView } = usePlatform();
-  const { filterHealthyApps, reportAppError, isAppHealthy } = useAppHealth();
+  const { filterHealthyApps, reportAppError } = useAppHealth();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Get organization ID from URL query parameter
@@ -441,146 +441,121 @@ const AppStore: React.FC = () => {
         {/* App grid */}
         {!isLoading && !error && (
           <div className="mt-2 mb-2 sm:mt-8 sm:mb-8 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-2 sm:gap-y-12 px-0">
-            {filteredApps.map(app => {
-              const isDeveloper = isUserDeveloperOrTester(app);
-              const appIsHealthy = isAppHealthy(app.packageName);
-              
-              return (
-                <div 
-                  key={app.packageName} 
-                  className="p-4 sm:p-6 flex gap-3 transition-colors rounded-lg relative cursor-pointer" 
-                  onClick={() => handleCardClick(app.packageName)} 
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'} 
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  <div className="absolute bottom-0 left-3 right-3 h-px" style={{ backgroundColor: 'var(--border-color)' }}></div>
-                  
-                  {/* Image Column */}
-                  <div className="shrink-0 flex items-start pt-2 relative">
-                    <img
-                      src={app.logoURL}
-                      alt={`${app.name} logo`}
-                      className={`w-12 h-12 object-cover rounded-full ${!appIsHealthy && !isDeveloper ? 'opacity-50 grayscale' : ''}`}
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = 'https://placehold.co/48x48/gray/white?text=App';
-                      }}
-                    />
+            {filteredApps.map(app => (
+              <div 
+                key={app.packageName} 
+                className="p-4 sm:p-6 flex gap-3 transition-colors rounded-lg relative cursor-pointer" 
+                onClick={() => handleCardClick(app.packageName)} 
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'} 
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                <div className="absolute bottom-0 left-3 right-3 h-px" style={{ backgroundColor: 'var(--border-color)' }}></div>
+                
+                {/* Image Column */}
+                <div className="shrink-0 flex items-start pt-2">
+                  <img
+                    src={app.logoURL}
+                    alt={`${app.name} logo`}
+                    className="w-12 h-12 object-cover rounded-full"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = 'https://placehold.co/48x48/gray/white?text=App';
+                    }}
+                  />
+                </div>
+
+                {/* Content Column */}
+                <div className="flex-1 flex flex-col justify-center">
+                  <div>
+                    <h3 className="text-[15px] font-medium mb-1" style={{fontFamily: '"SF Pro Rounded", sans-serif', letterSpacing: '0.04em', color: 'var(--text-primary)'}}>{app.name}</h3>
                     
-                    {/* Health warning indicator for developers */}
-                    {!appIsHealthy && isDeveloper && (
-                      <div className="absolute -top-1 -right-1 bg-yellow-500 rounded-full p-1">
-                        <AlertTriangle className="h-3 w-3 text-white" />
-                      </div>
+                    {app.description && (
+                      <p className="text-[15px] font-normal leading-[1.3] line-clamp-3" style={{fontFamily: '"SF Pro Rounded", sans-serif', letterSpacing: '0.04em', color: theme === 'light' ? '#4a4a4a' : '#9A9CAC', WebkitLineClamp: 3, height: '3.9em', display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden'}}>{app.description}</p>
                     )}
                   </div>
+                </div>
 
-                  {/* Content Column */}
-                  <div className="flex-1 flex flex-col justify-center">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className={`text-[15px] font-medium ${!appIsHealthy && !isDeveloper ? 'opacity-50' : ''}`} style={{fontFamily: '"SF Pro Rounded", sans-serif', letterSpacing: '0.04em', color: 'var(--text-primary)'}}>{app.name}</h3>
-                        
-                        {/* Health status indicator for developers */}
-                        {!appIsHealthy && isDeveloper && (
-                          <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
-                            Unhealthy
-                          </span>
-                        )}
-                      </div>
-                      
-                      {app.description && (
-                        <p className={`text-[15px] font-normal leading-[1.3] line-clamp-3 ${!appIsHealthy && !isDeveloper ? 'opacity-50' : ''}`} style={{fontFamily: '"SF Pro Rounded", sans-serif', letterSpacing: '0.04em', color: theme === 'light' ? '#4a4a4a' : '#9A9CAC', WebkitLineClamp: 3, height: '3.9em', display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden'}}>{app.description}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Button Column */}
-                  <div className="shrink-0 flex items-center">
-                    {isAuthenticated ? (
-                      app.isInstalled ? (
-                        isWebView ? (
-                          // Show Open button only in webview for installed apps
-                          <Button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpen(app.packageName);
-                            }}
-                            disabled={installingApp === app.packageName || (!appIsHealthy && !isDeveloper)}
-                            className="text-[15px] font-normal tracking-[0.1em] px-4 py-[6px] rounded-full w-fit h-fit"
-                            style={{
-                              backgroundColor: 'var(--button-bg)',
-                              color: 'var(--button-text)',
-                              opacity: (!appIsHealthy && !isDeveloper) ? 0.5 : 1
-                            }}
-                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--button-hover)'}
-                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--button-bg)'}
-                          >
-                            <>Open</>
-                          </Button>
-                        ) : (
-                          // Show greyed out Installed button for installed apps on desktop/mobile
-                          <Button
-                            disabled={true}
-                            className="text-[15px] font-normal tracking-[0.1em] px-4 py-[6px] rounded-full w-fit h-fit opacity-30 cursor-not-allowed"
-                            style={{
-                              backgroundColor: 'var(--button-bg)',
-                              color: 'var(--button-text)',
-                              filter: 'grayscale(100%)'
-                            }}
-                          >
-                            <>Installed</>
-                          </Button>
-                        )
-                      ) : (
+                {/* Button Column */}
+                <div className="shrink-0 flex items-center">
+                  {isAuthenticated ? (
+                    app.isInstalled ? (
+                      isWebView ? (
+                        // Show Open button only in webview for installed apps
                         <Button
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleInstall(app.packageName);
+                            handleOpen(app.packageName);
                           }}
-                          disabled={installingApp === app.packageName || (!appIsHealthy && !isDeveloper)}
+                          disabled={installingApp === app.packageName}
                           className="text-[15px] font-normal tracking-[0.1em] px-4 py-[6px] rounded-full w-fit h-fit"
                           style={{
                             backgroundColor: 'var(--button-bg)',
-                            color: 'var(--button-text)',
-                            opacity: (!appIsHealthy && !isDeveloper) ? 0.5 : 1
+                            color: 'var(--button-text)'
                           }}
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--button-hover)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--button-bg)'}
                         >
-                          {installingApp === app.packageName ? (
-                            <>
-                              <div className="animate-spin h-4 w-4 border-2 border-t-transparent rounded-full mr-2" style={{ borderColor: 'var(--button-text)', borderTopColor: 'transparent' }}></div>
-                              Installing
-                            </>
-                          ) : (
-                            <>Get</>
-                          )}
+                          <>Open</>
+                        </Button>
+                      ) : (
+                        // Show greyed out Installed button for installed apps on desktop/mobile
+                        <Button
+                          disabled={true}
+                          className="text-[15px] font-normal tracking-[0.1em] px-4 py-[6px] rounded-full w-fit h-fit opacity-30 cursor-not-allowed"
+                          style={{
+                            backgroundColor: 'var(--button-bg)',
+                            color: 'var(--button-text)',
+                            filter: 'grayscale(100%)'
+                          }}
+                        >
+                          <>Installed</>
                         </Button>
                       )
                     ) : (
                       <Button
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate('/login');
+                          handleInstall(app.packageName);
                         }}
-                        disabled={!appIsHealthy && !isDeveloper}
-                        className="text-[15px] font-normal tracking-[0.1em] px-4 py-[6px] rounded-full w-fit h-fit flex items-center gap-2"
+                        disabled={installingApp === app.packageName}
+                        className="text-[15px] font-normal tracking-[0.1em] px-4 py-[6px] rounded-full w-fit h-fit"
                         style={{
                           backgroundColor: 'var(--button-bg)',
-                          color: 'var(--button-text)',
-                          opacity: (!appIsHealthy && !isDeveloper) ? 0.5 : 1
+                          color: 'var(--button-text)'
                         }}
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--button-hover)'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--button-bg)'}
                       >
-                        <Lock className="h-4 w-4 mr-1" />
-                        Sign in
+                        {installingApp === app.packageName ? (
+                          <>
+                            <div className="animate-spin h-4 w-4 border-2 border-t-transparent rounded-full mr-2" style={{ borderColor: 'var(--button-text)', borderTopColor: 'transparent' }}></div>
+                            Installing
+                          </>
+                        ) : (
+                          <>Get</>
+                        )}
                       </Button>
-                    )}
-                  </div>
+                    )
+                  ) : (
+                    <Button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate('/login');
+                      }}
+                      className="text-[15px] font-normal tracking-[0.1em] px-4 py-[6px] rounded-full w-fit h-fit flex items-center gap-2"
+                      style={{
+                        backgroundColor: 'var(--button-bg)',
+                        color: 'var(--button-text)'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--button-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--button-bg)'}
+                    >
+                      <Lock className="h-4 w-4 mr-1" />
+                      Sign in
+                    </Button>
+                  )}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
 
