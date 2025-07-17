@@ -1195,6 +1195,235 @@ async function getAvailableApps(req: Request, res: Response) {
   }
 };
 
+// App health monitoring
+interface AppErrorReport {
+  error: string;
+  timestamp: string;
+}
+
+interface AppHealthCache {
+  [packageName: string]: {
+    isHealthy: boolean;
+    lastChecked: Date;
+    lastHealthy?: Date;
+    errorCount: number;
+    errors: AppErrorReport[];
+  };
+}
+
+// In-memory health cache
+const appHealthCache: AppHealthCache = {};
+
+/**
+ * Report app error
+ */
+async function reportAppError(req: Request, res: Response) {
+  try {
+    const { packageName } = req.params;
+    const { error, timestamp }: AppErrorReport = req.body;
+
+    if (!error || !timestamp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Error and timestamp are required'
+      });
+    }
+
+    // Validate app exists
+    const app = await appService.getApp(packageName);
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: 'App not found'
+      });
+    }
+
+    // Update health cache
+    if (!appHealthCache[packageName]) {
+      appHealthCache[packageName] = {
+        isHealthy: true,
+        lastChecked: new Date(),
+        errorCount: 0,
+        errors: []
+      };
+    }
+
+    const healthStatus = appHealthCache[packageName];
+    healthStatus.isHealthy = false;
+    healthStatus.lastChecked = new Date();
+    healthStatus.errorCount += 1;
+    healthStatus.errors.push({ error, timestamp });
+
+    // Keep only last 10 errors
+    if (healthStatus.errors.length > 10) {
+      healthStatus.errors = healthStatus.errors.slice(-10);
+    }
+
+    logger.warn({
+      packageName,
+      error,
+      errorCount: healthStatus.errorCount,
+      timestamp
+    }, `App error reported: ${packageName}`);
+
+    res.json({
+      success: true,
+      message: 'Error reported successfully'
+    });
+
+  } catch (error) {
+    logger.error({ error, packageName: req.params.packageName }, 'Error reporting app error');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to report error'
+    });
+  }
+}
+
+/**
+ * Check app health
+ */
+async function checkAppHealth(req: Request, res: Response) {
+  try {
+    const { packageName } = req.params;
+
+    // Validate app exists
+    const app = await appService.getApp(packageName);
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: 'App not found'
+      });
+    }
+
+    // Get or initialize health status
+    if (!appHealthCache[packageName]) {
+      appHealthCache[packageName] = {
+        isHealthy: true,
+        lastChecked: new Date(),
+        errorCount: 0,
+        errors: []
+      };
+    }
+
+    const healthStatus = appHealthCache[packageName];
+    healthStatus.lastChecked = new Date();
+
+    res.json({
+      success: true,
+      data: {
+        isHealthy: healthStatus.isHealthy
+      }
+    });
+
+  } catch (error) {
+    logger.error({ error, packageName: req.params.packageName }, 'Error checking app health');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check app health'
+    });
+  }
+}
+
+/**
+ * Mark app as healthy (used by heartbeat recovery)
+ */
+async function markAppHealthy(req: Request, res: Response) {
+  try {
+    const { packageName } = req.params;
+
+    // Validate app exists
+    const app = await appService.getApp(packageName);
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: 'App not found'
+      });
+    }
+
+    // Update health cache
+    if (!appHealthCache[packageName]) {
+      appHealthCache[packageName] = {
+        isHealthy: true,
+        lastChecked: new Date(),
+        errorCount: 0,
+        errors: []
+      };
+    }
+
+    const healthStatus = appHealthCache[packageName];
+    healthStatus.isHealthy = true;
+    healthStatus.lastChecked = new Date();
+    healthStatus.lastHealthy = new Date();
+    healthStatus.errorCount = 0;
+    healthStatus.errors = [];
+
+    logger.info({ packageName }, `App marked as healthy: ${packageName}`);
+
+    res.json({
+      success: true,
+      message: 'App marked as healthy'
+    });
+
+  } catch (error) {
+    logger.error({ error, packageName: req.params.packageName }, 'Error marking app as healthy');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark app as healthy'
+    });
+  }
+}
+
+/**
+ * Bulk health check for multiple apps
+ */
+async function bulkHealthCheck(req: Request, res: Response) {
+  try {
+    const { packageNames }: { packageNames: string[] } = req.body;
+
+    if (!Array.isArray(packageNames)) {
+      return res.status(400).json({
+        success: false,
+        message: 'packageNames must be an array'
+      });
+    }
+
+    const healthStatuses = packageNames.map(packageName => {
+      if (!appHealthCache[packageName]) {
+        appHealthCache[packageName] = {
+          isHealthy: true,
+          lastChecked: new Date(),
+          errorCount: 0,
+          errors: []
+        };
+      }
+
+      const healthStatus = appHealthCache[packageName];
+      healthStatus.lastChecked = new Date();
+
+      return {
+        packageName,
+        isHealthy: healthStatus.isHealthy,
+        lastChecked: healthStatus.lastChecked.toISOString(),
+        lastHealthy: healthStatus.lastHealthy?.toISOString(),
+        errorCount: healthStatus.errorCount
+      };
+    });
+
+    res.json({
+      success: true,
+      data: healthStatuses
+    });
+
+  } catch (error) {
+    logger.error({ error }, 'Error performing bulk health check');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to perform bulk health check'
+    });
+  }
+}
+
 // Route Definitions
 router.get('/', unifiedAuthMiddleware, getAllApps);
 router.get('/public', getPublicApps);
@@ -1224,6 +1453,12 @@ router.get('/:packageName', getAppByPackage);
 // Device-specific operations - use unified auth
 router.post('/:packageName/start', unifiedAuthMiddleware, startApp);
 router.post('/:packageName/stop', unifiedAuthMiddleware, stopApp);
+
+// App health monitoring endpoints
+router.post('/:packageName/error', reportAppError);
+router.get('/:packageName/health', checkAppHealth);
+router.post('/:packageName/healthy', markAppHealthy);
+router.post('/health/bulk', bulkHealthCheck);
 
 // Helper to enhance apps with running/foreground state and activity data
 /**

@@ -1,6 +1,7 @@
-// store/web/src/services/api.service.ts
-import { AppI } from "@/types";
+// src/api/index.ts - Updated with health monitoring
+import { AppI } from "../types";
 import axios from "axios";
+import { appHealthMonitor } from '../utils/appHealthMonitor';
 
 // Configure base axios defaults
 axios.defaults.withCredentials = true;
@@ -39,20 +40,51 @@ export interface User {
 // Filter options interface
 export interface AppFilterOptions {
   organizationId?: string;
+  includeUnhealthy?: boolean; // For developers/testers
 }
+
+// Health check response
+export interface AppHealthStatusResponse {
+  packageName: string;
+  isHealthy: boolean;
+  lastChecked: string;
+  errorCount: number;
+}
+
+// Wrapper function to handle app errors and health monitoring
+const handleAppError = async (packageName: string, error: any, operation: string) => {
+  console.error(`App ${packageName} ${operation} failed:`, error);
+  
+  // Check if this is a connectivity/server error
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    
+    // Report as unhealthy if it's a server error or network error
+    if (!status || status >= 500 || error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      await appHealthMonitor.reportAppError(packageName, error);
+    }
+  }
+  
+  throw error;
+};
 
 // App service functions
 const appService = {
   /**
    * Get all public apps (no auth required)
-   * Uses store backend
+   * Uses store backend - now includes health filtering
    */
   getPublicApps: async (): Promise<AppI[]> => {
     try {
       const response = await axios.get<ApiResponse<AppI[]>>(
         `/api/apps/public`
       );
-      return response.data.data || [];
+      
+      const apps = response.data.data || [];
+      
+      // Filter out unhealthy apps on the backend, but we'll also
+      // do client-side filtering for real-time updates
+      return apps;
     } catch (error) {
       console.error("Error fetching public apps:", error);
       return []; // Return empty array on error
@@ -61,16 +93,26 @@ const appService = {
 
   /**
    * Get all available apps (auth required)
-   * Uses store backend
+   * Uses store backend - now includes health filtering
    * @param options Optional filter options
    */
   getAvailableApps: async (options?: AppFilterOptions): Promise<AppI[]> => {
     try {
       let url = `/api/apps/available`;
+      const params = new URLSearchParams();
 
       // Add organization filter if provided
       if (options?.organizationId) {
-        url += `?organizationId=${encodeURIComponent(options.organizationId)}`;
+        params.append('organizationId', options.organizationId);
+      }
+
+      // Add health filter option for developers/testers
+      if (options?.includeUnhealthy) {
+        params.append('includeUnhealthy', 'true');
+      }
+
+      if (params.toString()) {
+        url += `?${params.toString()}`;
       }
 
       const response = await axios.get<ApiResponse<AppI[]>>(url);
@@ -83,7 +125,7 @@ const appService = {
 
   /**
    * Get user's installed apps (auth required)
-   * Uses store backend
+   * Uses store backend - now includes health filtering
    */
   getInstalledApps: async (): Promise<AppI[]> => {
     try {
@@ -115,7 +157,7 @@ const appService = {
 
   /**
    * Install an app (auth required)
-   * Uses cloud backend
+   * Uses cloud backend - now with error monitoring
    */
   installApp: async (packageName: string): Promise<boolean> => {
     try {
@@ -124,38 +166,30 @@ const appService = {
       );
       return response.data.success;
     } catch (error) {
-      console.error(`Error installing app ${packageName}:`, error);
-      throw error;
+      await handleAppError(packageName, error, 'installation');
+      return false;
     }
   },
 
   /**
    * Uninstall an app (auth required)
-   * Uses cloud backend
+   * Uses cloud backend - now with error monitoring
    */
   uninstallApp: async (packageName: string): Promise<boolean> => {
     try {
-      // First stop the app and verify it was successful
-      // const stopSuccess = await appService.stopApp(packageName);
-      // if (!stopSuccess) {
-      //   throw new Error(`Failed to stop app ${packageName} before uninstallation`);
-      // }
-      // backend will stop the app automatically if it is running.
-
-      // Then uninstall it
       const response = await axios.post<ApiResponse<null>>(
         `/api/apps/uninstall/${packageName}`
       );
       return response.data.success;
     } catch (error) {
-      console.error(`Error uninstalling app ${packageName}:`, error);
-      throw error;
+      await handleAppError(packageName, error, 'uninstallation');
+      return false;
     }
   },
 
   /**
    * Start an app (auth required)
-   * Uses cloud backend
+   * Uses cloud backend - now with error monitoring
    */
   startApp: async (packageName: string): Promise<boolean> => {
     try {
@@ -164,14 +198,14 @@ const appService = {
       );
       return response.data.success;
     } catch (error) {
-      console.error(`Error starting app ${packageName}:`, error);
-      throw error;
+      await handleAppError(packageName, error, 'start');
+      return false;
     }
   },
 
   /**
    * Stop an app (auth required)
-   * Uses cloud backend
+   * Uses cloud backend - now with error monitoring
    */
   stopApp: async (packageName: string): Promise<boolean> => {
     try {
@@ -180,14 +214,14 @@ const appService = {
       );
       return response.data.success;
     } catch (error) {
-      console.error(`Error stopping app ${packageName}:`, error);
-      throw error;
+      await handleAppError(packageName, error, 'stop');
+      return false;
     }
   },
 
   /**
    * Search for apps (no auth required)
-   * Uses store backend
+   * Uses store backend - now includes health filtering
    * @param query Search query string
    * @param options Optional filter options
    */
@@ -200,11 +234,81 @@ const appService = {
         url += `&organizationId=${encodeURIComponent(options.organizationId)}`;
       }
 
+      // Add health filter option for developers/testers
+      if (options?.includeUnhealthy) {
+        url += `&includeUnhealthy=true`;
+      }
+
       const response = await axios.get<ApiResponse<AppI[]>>(url);
       return response.data.data || [];
     } catch (error) {
       console.error(`Error searching apps with query "${query}":`, error);
       return []; // Return empty array on error
+    }
+  },
+
+  /**
+   * Check health status of an app
+   */
+  checkAppHealth: async (packageName: string): Promise<boolean> => {
+    try {
+      const response = await axios.get<ApiResponse<{ isHealthy: boolean }>>(
+        `/api/apps/${packageName}/health`
+      );
+      return response.data.data.isHealthy;
+    } catch (error) {
+      console.error(`Health check failed for ${packageName}:`, error);
+      return false;
+    }
+  },
+
+  /**
+   * Get health status for multiple apps
+   */
+  getBulkAppHealth: async (packageNames: string[]): Promise<AppHealthStatusResponse[]> => {
+    try {
+      const response = await axios.post<ApiResponse<AppHealthStatusResponse[]>>(
+        `/api/apps/health/bulk`,
+        { packageNames }
+      );
+      return response.data.data;
+    } catch (error) {
+      console.error('Bulk health check failed:', error);
+      return [];
+    }
+  },
+
+  /**
+   * Report an app error
+   */
+  reportAppError: async (packageName: string, error: string): Promise<boolean> => {
+    try {
+      const response = await axios.post<ApiResponse<null>>(
+        `/api/apps/${packageName}/error`,
+        { 
+          error,
+          timestamp: new Date().toISOString()
+        }
+      );
+      return response.data.success;
+    } catch (err) {
+      console.error(`Failed to report error for ${packageName}:`, err);
+      return false;
+    }
+  },
+
+  /**
+   * Mark an app as healthy
+   */
+  markAppHealthy: async (packageName: string): Promise<boolean> => {
+    try {
+      const response = await axios.post<ApiResponse<null>>(
+        `/api/apps/${packageName}/healthy`
+      );
+      return response.data.success;
+    } catch (error) {
+      console.error(`Failed to mark ${packageName} as healthy:`, error);
+      return false;
     }
   }
 };

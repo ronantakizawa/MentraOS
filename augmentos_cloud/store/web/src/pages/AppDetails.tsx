@@ -1,16 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Download, X, ExternalLink, Calendar, Clock, Info, Star, Package, Building, Globe, Mail, FileText } from 'lucide-react';
+import { ArrowLeft, Download, X, ExternalLink, Calendar, Clock, Info, Star, Package, Building, Globe, Mail, FileText, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
 import { useIsDesktop } from '../hooks/useMediaQuery';
 import { usePlatform } from '../hooks/usePlatform';
+import { useAppHealth } from '../hooks/useAppHealth';
 import api from '../api';
 import { AppI } from '../types';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
+import { Button } from '../components/ui/button';
 import Header from '../components/Header';
-import AppPermissions from '../components/AppPermissions';
 
 // Extend window interface for React Native WebView
 declare global {
@@ -25,15 +25,34 @@ const AppDetails: React.FC = () => {
   const { packageName } = useParams<{ packageName: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { theme } = useTheme();
   const isDesktop = useIsDesktop();
   const { isWebView } = usePlatform();
+  const { reportAppError, isAppHealthy } = useAppHealth();
 
   const [app, setApp] = useState<AppI | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [installingApp, setInstallingApp] = useState<boolean>(false);
+
+  // Check if user is developer/tester for an app
+  const isUserDeveloperOrTester = (app: AppI): boolean => {
+    if (!user) return false;
+    
+    // Check if user is the developer
+    if (app.developerId === user.email) {
+      return true;
+    }
+    
+    // Add additional checks for testers if you have that data
+    // For example, if you have a testers array in the app object:
+    // if (app.testers?.includes(user.email)) {
+    //   return true;
+    // }
+    
+    return false;
+  };
 
   // Fetch app details on component mount
   useEffect(() => {
@@ -62,6 +81,16 @@ const AppDetails: React.FC = () => {
 
       if (!appDetails) {
         setError('App not found');
+        return;
+      }
+
+      // Check if app is healthy and if user should see it
+      const appHealthy = isAppHealthy(pkgName);
+      const isDeveloper = isUserDeveloperOrTester(appDetails);
+      
+      // Hide unhealthy apps from non-developers/testers
+      if (!appHealthy && !isDeveloper) {
+        setError('This app is temporarily unavailable');
         return;
       }
 
@@ -99,7 +128,7 @@ const AppDetails: React.FC = () => {
     }
   };
 
-  // Handle app installation
+  // Handle app installation with error monitoring
   const handleInstall = async () => {
     if (!isAuthenticated) {
       navigate('/login');
@@ -108,7 +137,6 @@ const AppDetails: React.FC = () => {
 
     if (!app) return;
 
-    // Use the web API
     try {
       setInstallingApp(true);
 
@@ -122,42 +150,52 @@ const AppDetails: React.FC = () => {
       }
     } catch (err) {
       console.error('Error installing app:', err);
-      toast.error('Failed to install app');
+      
+      // Report the error for health monitoring
+      await reportAppError(app.packageName, err);
+      
+      toast.error('Failed to install app - the app may be temporarily unavailable');
+      
+      // Navigate back to store since app is now unhealthy
+      navigate('/');
     } finally {
       setInstallingApp(false);
     }
   };
 
-  // Handle opening app settings
-  const handleOpen = (packageName: string) => {
-    // If we're in webview, send message to React Native to open TPA settings
-    if (isWebView && window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'OPEN_APP_SETTINGS',
-        packageName: packageName
-      }));
-    } else {
-      // Fallback: refresh the page
-      window.location.reload();
+  // Handle opening app settings with error monitoring
+  const handleOpen = async (packageName: string) => {
+    try {
+      // If we're in webview, send message to React Native to open TPA settings
+      if (isWebView && window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'OPEN_APP_SETTINGS',
+          packageName: packageName
+        }));
+      } else {
+        // Fallback: refresh the page
+        window.location.reload();
+      }
+    } catch (err) {
+      console.error('Error opening app:', err);
+      
+      // Report the error for health monitoring
+      await reportAppError(packageName, err);
+      
+      toast.error('Failed to open app - the app may be temporarily unavailable');
+      
+      // Navigate back to store since app is now unhealthy
+      navigate('/');
     }
   };
 
-  // Handle app uninstallation
+  // Handle app uninstallation with error monitoring
   const handleUninstall = async () => {
     if (!isAuthenticated || !app) return;
 
     try {
       setInstallingApp(true);
 
-      // First stop the app
-      // const stopSuccess = await api.app.stopApp(app.packageName);
-      // if (!stopSuccess) {
-      //   toast.error('Failed to stop app before uninstallation');
-      //   return;
-      // }
-      // App should be stopped automatically by the backend when uninstalling.
-
-      // Then uninstall the app
       console.log('Uninstalling app:', app.packageName);
       const uninstallSuccess = await api.app.uninstallApp(app.packageName);
 
@@ -169,7 +207,11 @@ const AppDetails: React.FC = () => {
       }
     } catch (err) {
       console.error('Error uninstalling app:', err);
-      toast.error('Failed to uninstall app. Please try again.');
+      
+      // Report the error for health monitoring
+      await reportAppError(app.packageName, err);
+      
+      toast.error('Failed to uninstall app - the app may be temporarily unavailable');
     } finally {
       setInstallingApp(false);
     }
@@ -185,6 +227,10 @@ const AppDetails: React.FC = () => {
     });
   };
 
+  // Check if current app is healthy and if user is developer
+  const appHealthy = app ? isAppHealthy(app.packageName) : true;
+  const isDeveloper = app ? isUserDeveloperOrTester(app) : false;
+
   return (
     <>
       {/* Show header on mobile screens */}
@@ -198,7 +244,19 @@ const AppDetails: React.FC = () => {
       >
         {/* Error state */}
         {!isLoading && error && (
-          <div className="text-red-500 p-4">{error}</div>
+          <div className="text-red-500 p-4 text-center">
+            <div className="max-w-md mx-auto">
+              <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-red-500" />
+              <h2 className="text-lg font-semibold mb-2">App Unavailable</h2>
+              <p className="mb-4">{error}</p>
+              <Button
+                onClick={() => navigate('/')}
+                className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                Back to Store
+              </Button>
+            </div>
+          </div>
         )}
 
         {/* Loading state */}
@@ -223,222 +281,272 @@ const AppDetails: React.FC = () => {
               } : {})
             }}
           >
-          {/* Desktop Close Button */}
-          <button
-            onClick={() => navigate(-1)}
-            className="hidden sm:block absolute top-6 right-6 transition-colors"
-            style={{
-              color: theme === 'light' ? '#000000' : '#9CA3AF'
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.color = theme === 'light' ? '#333333' : '#ffffff'}
-            onMouseLeave={(e) => e.currentTarget.style.color = theme === 'light' ? '#000000' : '#9CA3AF'}
-            aria-label="Close"
-          >
-            <X className="h-6 w-6" />
-          </button>
+            {/* Health warning banner for developers */}
+            {!appHealthy && isDeveloper && (
+              <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4">
+                <div className="flex items-center">
+                  <AlertTriangle className="h-5 w-5 mr-2" />
+                  <div>
+                    <p className="font-medium">App Health Warning</p>
+                    <p className="text-sm">This app is currently experiencing issues and is hidden from regular users. Only developers and testers can see it.</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-          {/* Mobile Back Button */}
-          <div className="sm:hidden px-6 py-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
+            {/* Desktop Close Button */}
             <button
               onClick={() => navigate(-1)}
-              className="flex items-center gap-2 transition-colors"
-              style={{ color: 'var(--text-primary)' }}
-            >
-              <ArrowLeft className="h-5 w-5" />
-              <span className="text-[16px]">Back</span>
-            </button>
-          </div>
-
-          {/* Content wrapper with responsive padding */}
-          <div className="px-6 py-6 pb-safe sm:p-0">
-            <div className="max-w-2xl mx-auto sm:max-w-none sm:p-12 pb-8 sm:pb-12">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-8 max-[840px]:flex-col max-[840px]:gap-6">
-              <div className="flex items-center gap-4 max-[840px]:flex-col max-[840px]:items-center max-[840px]:gap-4">
-              <img
-                src={app.logoURL}
-                alt={`${app.name} logo`}
-                className="w-16 h-16 object-cover rounded-full"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src =
-                    'https://placehold.co/64x64/gray/white?text=App';
-                }}
-              />
-              <h2
-                id="app-modal-title"
-                className="text-[32px] font-medium leading-[1.2] max-[840px]:text-center"
-                style={{
-                  fontFamily: '"SF Pro Rounded", sans-serif',
-                  letterSpacing: '0.02em',
-                  color: 'var(--text-primary)'
-                }}
-              >
-                {app.name}
-              </h2>
-            </div>
-
-            <div className="flex items-center gap-4 max-[840px]:w-full max-[840px]:justify-center">
-              {isAuthenticated ? (
-                app.isInstalled ? (
-                  isWebView ? (
-                    <Button
-                      onClick={() => handleOpen(app.packageName)}
-                      disabled={installingApp}
-                      className="w-full sm:w-[140px] h-[40px] text-[#E2E4FF] text-[16px] font-normal rounded-full"
-                      style={{
-                        fontFamily: '"SF Pro Rounded", sans-serif',
-                        backgroundColor: 'var(--button-bg)',
-                        color: 'var(--button-text)'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--button-hover)'}
-                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--button-bg)'}
-                    >
-                      Open
-                    </Button>
-                  ) : (
-                    // Show greyed out Installed button for installed apps on desktop/mobile
-                    <Button
-                      disabled={true}
-                      className="w-full sm:w-[140px] h-[40px] text-[#E2E4FF] text-[16px] font-normal rounded-full opacity-30 cursor-not-allowed"
-                      style={{
-                        fontFamily: '"SF Pro Rounded", sans-serif',
-                        backgroundColor: 'var(--button-bg)',
-                        color: 'var(--button-text)',
-                        filter: 'grayscale(100%)'
-                      }}
-                    >
-                      Installed
-                    </Button>
-                  )
-                ) : (
-                  <Button
-                    onClick={handleInstall}
-                    disabled={installingApp}
-                    className="w-full sm:w-[140px] h-[40px] bg-[#242454] hover:bg-[#2d2f5a] text-[#E2E4FF] text-[16px] font-normal rounded-full"
-                    style={{ fontFamily: '"SF Pro Rounded", sans-serif' }}
-                  >
-                    {installingApp ? 'Installing…' : 'Get App'}
-                  </Button>
-                )
-              ) : (
-                <Button
-                  onClick={() => navigate('/login', { state: { returnTo: location.pathname } })}
-                  className="w-full sm:w-[140px] h-[40px] bg-[#242454] text-[#E2E4FF] text-[16px] font-normal rounded-full"
-                  style={{ fontFamily: '"SF Pro Rounded", sans-serif' }}
-                >
-                  Sign in
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {/* Description */}
-          <div className="mb-12">
-            <p
-              className="text-[16px] font-normal leading-[1.6] sm:max-w-[480px]"
-              style={{ fontFamily: '"SF Pro Rounded", sans-serif', color: theme === 'light' ? '#000000' : '#E4E4E7' }}
-            >
-              {app.description || 'No description available.'}
-            </p>
-          </div>
-
-          {/* Information Section */}
-          <div className="mb-12">
-            <h3
-              className="text-[12px] font-semibold uppercase mb-6"
+              className="hidden sm:block absolute top-6 right-6 transition-colors"
               style={{
-                fontFamily: '"SF Pro Rounded", sans-serif',
-                letterSpacing: '0.05em',
                 color: theme === 'light' ? '#000000' : '#9CA3AF'
               }}
+              onMouseEnter={(e) => e.currentTarget.style.color = theme === 'light' ? '#333333' : '#ffffff'}
+              onMouseLeave={(e) => e.currentTarget.style.color = theme === 'light' ? '#000000' : '#9CA3AF'}
+              aria-label="Close"
             >
-              Information
-            </h3>
+              <X className="h-6 w-6" />
+            </button>
 
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Company</span>
-                <span className="text-[14px] font-normal text-right" style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
-                  {app.orgName || app.developerProfile?.company || 'Mentra'}
-                </span>
-              </div>
-
-              {app.developerProfile?.website && (
-                <div className="flex justify-between items-center">
-                  <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Website</span>
-                  <a
-                    href={app.developerProfile.website}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[14px] font-normal hover:underline text-right"
-                    style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}
-                  >
-                    {app.developerProfile.website}
-                  </a>
-                </div>
-              )}
-
-              {app.developerProfile?.contactEmail && (
-                <div className="flex justify-between items-center">
-                  <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Contact</span>
-                  <a
-                    href={`mailto:${app.developerProfile.contactEmail}`}
-                    className="text-[14px] font-normal hover:underline text-right"
-                    style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}
-                  >
-                    {app.developerProfile.contactEmail}
-                  </a>
-                </div>
-              )}
-
-              <div className="flex justify-between items-center">
-                <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>App Type</span>
-                <span className="text-[14px] font-normal text-right capitalize" style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
-                  {(() => {
-                    const appType = app.appType ?? app.tpaType ?? 'Foreground';
-                    return appType === 'standard' ? 'Foreground' : appType;
-                  })()}
-                </span>
-              </div>
-
-              <div className="flex justify-between items-center">
-                <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Package</span>
-                <span className="text-[14px] font-normal text-right" style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
-                  {app.packageName.replace('.augmentos.', '.mentra.')} {/* TODO: remove this once we have migrated over */}
-                </span>
-              </div>
+            {/* Mobile Back Button */}
+            <div className="sm:hidden px-6 py-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
+              <button
+                onClick={() => navigate(-1)}
+                className="flex items-center gap-2 transition-colors"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                <ArrowLeft className="h-5 w-5" />
+                <span className="text-[16px]">Back</span>
+              </button>
             </div>
-          </div>
 
-          {/* Required Permissions */}
-          <div>
-            <h3
-              className="text-[12px] font-semibold uppercase mb-6"
-              style={{ fontFamily: '"SF Pro Rounded", sans-serif', letterSpacing: '0.05em', color: theme === 'light' ? '#000000' : '#9CA3AF' }}
-            >
-              Required Permissions
-            </h3>
-            <div className="space-y-3">
-              {app.permissions && app.permissions.length > 0 ? (
-                app.permissions.map((permission, index) => (
-                  <div
-                    key={index}
-                    className="text-[14px] font-normal leading-[1.5]"
-                    style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}
-                  >
-                    <strong style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
-                      {permission.type || 'Microphone'}
-                    </strong>{' '}
-                    {permission.description || 'For voice import and audio processing.'}
+            {/* Content wrapper with responsive padding */}
+            <div className="px-6 py-6 pb-safe sm:p-0">
+              <div className="max-w-2xl mx-auto sm:max-w-none sm:p-12 pb-8 sm:pb-12">
+                {/* Header */}
+                <div className="flex items-center justify-between mb-8 max-[840px]:flex-col max-[840px]:gap-6">
+                  <div className="flex items-center gap-4 max-[840px]:flex-col max-[840px]:items-center max-[840px]:gap-4">
+                    <div className="relative">
+                      <img
+                        src={app.logoURL}
+                        alt={`${app.name} logo`}
+                        className={`w-16 h-16 object-cover rounded-full ${!appHealthy && !isDeveloper ? 'opacity-50 grayscale' : ''}`}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src =
+                            'https://placehold.co/64x64/gray/white?text=App';
+                        }}
+                      />
+                      
+                      {/* Health warning indicator for developers */}
+                      {!appHealthy && isDeveloper && (
+                        <div className="absolute -top-1 -right-1 bg-yellow-500 rounded-full p-1">
+                          <AlertTriangle className="h-4 w-4 text-white" />
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex flex-col items-center max-[840px]:items-center">
+                      <h2
+                        id="app-modal-title"
+                        className={`text-[32px] font-medium leading-[1.2] max-[840px]:text-center ${!appHealthy && !isDeveloper ? 'opacity-50' : ''}`}
+                        style={{
+                          fontFamily: '"SF Pro Rounded", sans-serif',
+                          letterSpacing: '0.02em',
+                          color: 'var(--text-primary)'
+                        }}
+                      >
+                        {app.name}
+                      </h2>
+                      
+                      {/* Health status indicator for developers */}
+                      {!appHealthy && isDeveloper && (
+                        <span className="mt-2 text-sm bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full">
+                          App Unhealthy - Hidden from Users
+                        </span>
+                      )}
+                    </div>
                   </div>
-                ))
-              ) : (
-                <div className="text-[14px] font-normal" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>None</div>
-              )}
+
+                  <div className="flex items-center gap-4 max-[840px]:w-full max-[840px]:justify-center">
+                    {isAuthenticated ? (
+                      app.isInstalled ? (
+                        isWebView ? (
+                          <Button
+                            onClick={() => handleOpen(app.packageName)}
+                            disabled={installingApp || (!appHealthy && !isDeveloper)}
+                            className="w-full sm:w-[140px] h-[40px] text-[#E2E4FF] text-[16px] font-normal rounded-full"
+                            style={{
+                              fontFamily: '"SF Pro Rounded", sans-serif',
+                              backgroundColor: 'var(--button-bg)',
+                              color: 'var(--button-text)',
+                              opacity: (!appHealthy && !isDeveloper) ? 0.5 : 1
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--button-hover)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--button-bg)'}
+                          >
+                            Open
+                          </Button>
+                        ) : (
+                          // Show greyed out Installed button for installed apps on desktop/mobile
+                          <Button
+                            disabled={true}
+                            className="w-full sm:w-[140px] h-[40px] text-[#E2E4FF] text-[16px] font-normal rounded-full opacity-30 cursor-not-allowed"
+                            style={{
+                              fontFamily: '"SF Pro Rounded", sans-serif',
+                              backgroundColor: 'var(--button-bg)',
+                              color: 'var(--button-text)',
+                              filter: 'grayscale(100%)'
+                            }}
+                          >
+                            Installed
+                          </Button>
+                        )
+                      ) : (
+                        <Button
+                          onClick={handleInstall}
+                          disabled={installingApp || (!appHealthy && !isDeveloper)}
+                          className="w-full sm:w-[140px] h-[40px] bg-[#242454] hover:bg-[#2d2f5a] text-[#E2E4FF] text-[16px] font-normal rounded-full"
+                          style={{ 
+                            fontFamily: '"SF Pro Rounded", sans-serif',
+                            opacity: (!appHealthy && !isDeveloper) ? 0.5 : 1
+                          }}
+                        >
+                          {installingApp ? 'Installing…' : 'Get App'}
+                        </Button>
+                      )
+                    ) : (
+                      <Button
+                        onClick={() => navigate('/login', { state: { returnTo: location.pathname } })}
+                        disabled={!appHealthy && !isDeveloper}
+                        className="w-full sm:w-[140px] h-[40px] bg-[#242454] text-[#E2E4FF] text-[16px] font-normal rounded-full"
+                        style={{ 
+                          fontFamily: '"SF Pro Rounded", sans-serif',
+                          opacity: (!appHealthy && !isDeveloper) ? 0.5 : 1
+                        }}
+                      >
+                        Sign in
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div className="mb-12">
+                  <p
+                    className={`text-[16px] font-normal leading-[1.6] sm:max-w-[480px] ${!appHealthy && !isDeveloper ? 'opacity-50' : ''}`}
+                    style={{ fontFamily: '"SF Pro Rounded", sans-serif', color: theme === 'light' ? '#000000' : '#E4E4E7' }}
+                  >
+                    {app.description || 'No description available.'}
+                  </p>
+                </div>
+
+                {/* Information Section */}
+                <div className="mb-12">
+                  <h3
+                    className="text-[12px] font-semibold uppercase mb-6"
+                    style={{
+                      fontFamily: '"SF Pro Rounded", sans-serif',
+                      letterSpacing: '0.05em',
+                      color: theme === 'light' ? '#000000' : '#9CA3AF'
+                    }}
+                  >
+                    Information
+                  </h3>
+
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Company</span>
+                      <span className="text-[14px] font-normal text-right" style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
+                        {app.orgName || app.developerProfile?.company || 'Mentra'}
+                      </span>
+                    </div>
+
+                    {app.developerProfile?.website && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Website</span>
+                        <a
+                          href={app.developerProfile.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[14px] font-normal hover:underline text-right"
+                          style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}
+                        >
+                          {app.developerProfile.website}
+                        </a>
+                      </div>
+                    )}
+
+                    {app.developerProfile?.contactEmail && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Contact</span>
+                        <a
+                          href={`mailto:${app.developerProfile.contactEmail}`}
+                          className="text-[14px] font-normal hover:underline text-right"
+                          style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}
+                        >
+                          {app.developerProfile.contactEmail}
+                        </a>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center">
+                      <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>App Type</span>
+                      <span className="text-[14px] font-normal text-right capitalize" style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
+                        {(() => {
+                          const appType = app.appType ?? app.tpaType ?? 'Foreground';
+                          return appType === 'standard' ? 'Foreground' : appType;
+                        })()}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Package</span>
+                      <span className="text-[14px] font-normal text-right" style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
+                        {app.packageName.replace('.augmentos.', '.mentra.')} {/* TODO: remove this once we have migrated over */}
+                      </span>
+                    </div>
+
+                    {/* Health status for developers */}
+                    {isDeveloper && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-[14px] font-medium" style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>Health Status</span>
+                        <span className={`text-[14px] font-normal text-right ${appHealthy ? 'text-green-600' : 'text-red-600'}`}>
+                          {appHealthy ? 'Healthy' : 'Unhealthy'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Required Permissions */}
+                <div>
+                  <h3
+                    className="text-[12px] font-semibold uppercase mb-6"
+                    style={{ fontFamily: '"SF Pro Rounded", sans-serif', letterSpacing: '0.05em', color: theme === 'light' ? '#000000' : '#9CA3AF' }}
+                  >
+                    Required Permissions
+                  </h3>
+                  <div className="space-y-3">
+                    {app.permissions && app.permissions.length > 0 ? (
+                      app.permissions.map((permission, index) => (
+                        <div
+                          key={index}
+                          className={`text-[14px] font-normal leading-[1.5] ${!appHealthy && !isDeveloper ? 'opacity-50' : ''}`}
+                          style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}
+                        >
+                          <strong style={{ color: theme === 'light' ? '#000000' : '#E4E4E7' }}>
+                            {permission.type || 'Microphone'}
+                          </strong>{' '}
+                          {permission.description || 'For voice import and audio processing.'}
+                        </div>
+                      ))
+                    ) : (
+                      <div className={`text-[14px] font-normal ${!appHealthy && !isDeveloper ? 'opacity-50' : ''}`} style={{ color: theme === 'light' ? '#000000' : '#9CA3AF' }}>None</div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          </div>
-          </div>
           </div>
         )}
       </div>
